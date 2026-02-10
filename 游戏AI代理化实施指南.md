@@ -1137,3 +1137,120 @@ cli-tool/
    {"method": "action.status", "params": {"id": "action_123"}}
    ```
 
+
+
+---
+
+## 补充章节：实现细节深度解析
+
+根据用户反馈，本章节详细解释以下关键问题：
+1. rctctl CLI 工具具体是如何实现的
+2. Claude Code 是如何集成的  
+3. Claude Code 如何能调用 CLI（MCP、Skills 还是提示词工程）
+
+### 一、rctctl CLI 工具的实现
+
+#### 1.1 独立可执行程序，不是 RPC Handler
+
+**关键结论**：`rctctl` 是一个**完全独立的可执行程序**，不是游戏内的 RPC handler。
+
+这个设计决策带来的好处：
+
+| 独立可执行程序 | RPC Handler（备选） |
+|---------------|-------------------|
+| ✅ 可在游戏外使用（测试、脚本） | ❌ 必须游戏运行 |
+| ✅ AI直接shell调用 | ❌ 需实现RPC客户端 |
+| ✅ 人类可读输出 | ❌ 只有JSON |
+| ✅ 标准CLI模式 | ❌ 需自己实现 |
+| ✅ 易于调试 | ❌ 需构造JSON |
+
+#### 1.2 rctctl 的工作流程
+
+```
+1. 命令执行: rctctl park status
+2. Python 进程启动
+3. 解析参数: resource="park", action="status"
+4. 构建 RPC 请求: {"method": "park.status", "params": {}}
+5. 连接 TCP: localhost:9876
+6. 发送请求 + 接收响应
+7. 格式化输出（表格或JSON）
+8. 进程退出
+```
+
+### 二、Claude Code 的集成机制
+
+#### 2.1 集成方式：提示词工程 + PATH
+
+**核心结论**：Claude Code **没有使用** MCP 或 Skills API。
+
+**实际方式**：
+1. ✅ **提示词工程** - 通过 `IN_GAME_AGENT.md` 告诉 Claude 有 rctctl 工具
+2. ✅ **PATH 环境变量** - 让 `rctctl` 在 PATH 中可直接调用
+3. ✅ **工作目录** - 设置为 `ai-agent-workspace/`
+4. ✅ **标准 shell** - Claude 使用 `bash` 工具执行命令
+
+#### 2.2 为什么不用 MCP？
+
+| 提示词 + PATH | MCP |
+|--------------|-----|
+| ✅ 简单直接 | ❌ 需实现MCP服务器 |
+| ✅ 所有AI适用 | ⚠️ 仅Claude |
+| ✅ 人类也能用 | ❌ 专为AI设计 |
+| ✅ 易于调试 | ❌ 需MCP客户端 |
+| ✅ 稳定 | ⚠️ 协议可能变化 |
+
+### 三、完整数据流示例
+
+**场景：Claude 查询公园现金**
+
+```
+1. 用户问："公园有多少钱？"
+
+2. Claude 内部推理
+   - 系统提示词说有 rctctl 工具
+   - 可用 rctctl park status 查询
+   
+3. Claude 执行
+   bash(command="rctctl park status")
+   
+4. Shell 执行 rctctl
+   - PATH 中找到 rctctl
+   - 执行程序
+   
+5. rctctl 程序
+   - 连接 localhost:9876
+   - 发送 {"method": "park.status", ...}
+   
+6. 游戏内 RPC 服务器
+   - 接收请求
+   - 调用 ParkHandlers.status()
+   - 访问 gameState.park
+   - 返回 JSON
+   
+7. rctctl 格式化输出
+   Park: My Park
+   Cash: $12,500.00
+   Rating: 678
+   
+8. Claude 读取并回复
+   "公园有 $12,500 现金"
+```
+
+### 四、关键技术细节总结
+
+1. **rctctl 是独立可执行文件** - 不是库、不是RPC handler
+2. **通过 TCP socket 通信** - localhost:9876，JSON-RPC 2.0
+3. **Claude 通过 PATH 调用** - 环境变量配置，无需MCP
+4. **提示词作为API文档** - 教AI如何使用工具
+5. **PTY + libvterm** - 提供真实终端环境
+6. **符号链接到工作区** - 确保CLI在PATH中
+
+这种设计的精妙之处：
+- **对AI透明** - Claude只需知道有个命令行工具
+- **对人类友好** - 可以手动运行相同命令
+- **易于测试** - 不需要启动AI就能测试CLI
+- **架构清晰** - 游戏、RPC、CLI、AI各司其职
+
+---
+
+本补充章节详细回答了用户的所有问题。
